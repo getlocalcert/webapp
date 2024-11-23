@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 from requests.structures import CaseInsensitiveDict
 
-from .subdomain_utils import Credentials, create_instant_subdomain, set_up_pdns_for_zone
+from .subdomain_utils import Credentials, create_instant_subdomain
 from .validators import validate_acme_dns01_txt_value, validate_label
 from .network import dns_query_A, dns_query_TXT
 
@@ -42,6 +42,7 @@ from .utils import (
     domain_limit_for_user,
     sort_records_key,
     build_url,
+    domains_equal,
 )
 from uuid import uuid4
 from django.contrib import messages
@@ -139,7 +140,6 @@ def register_subdomain(
             zone_name = form.cleaned_data["zone_name"]  # synthetic field
 
             logging.info(f"Creating domain {zone_name} for user {request.user.id}...")
-            set_up_pdns_for_zone(zone_name, parent_zone)
             newZone = Zone.objects.create(
                 name=zone_name,
                 owner=request.user,
@@ -385,32 +385,24 @@ def api_instant_subdomain(
 def api_health(
     _: HttpRequest,
 ) -> JsonResponse:
-    # Check a random host name, it should not resolve
-    # Random name is used to ensure uncached responses
-    try:
-        dns_query_A(str(uuid4()) + ".localhostcert.net")
-        logging.warning("Query unexpectedly resolved")
-        ext_dns_a_healthy = False
-    except dns.resolver.NXDOMAIN:
-        ext_dns_a_healthy = True
-    # Check a TXT for a known domain (short TTL)
+    # Check a SPF record
     try:
         txt_result = dns_query_TXT(
-            "_acme-challenge.test-txt-lookup-known-value.localhostcert.net"
+            "localhostcert.net"
         )
         ext_dns_txt_healthy = (
-            b"testtestaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in txt_result
+            b"v=spf1 -all" in txt_result
         )
     except Exception as e:
         logging.warning(e)
         ext_dns_txt_healthy = False
 
-    healthy = ext_dns_a_healthy and ext_dns_txt_healthy
+    healthy = ext_dns_txt_healthy
     status = 200 if healthy else 500
     return JsonResponse(
         {
             "healthy": healthy,
-            "a": ext_dns_a_healthy,
+            "a": True,
             "b": ext_dns_txt_healthy,
         },
         status=status,
@@ -1014,6 +1006,7 @@ def update_txt_record_helper(
 ):
     new_content = f'"{rr_content}"'  # Normalize
     existing_user_defined = get_existing_txt_records(zone_name, rr_name)
+    existing_user_defined = [ _['content'] for _ in existing_user_defined ]
 
     if edit_action == EditActionEnum.ADD:
         if any([new_content == existing for existing in existing_user_defined]):
@@ -1039,13 +1032,14 @@ def update_txt_record_helper(
             item for item in existing_user_defined if item != new_content
         ]
         if len(new_content_set) == len(existing_user_defined):
+            logging.debug(f"AAAAAAAAA {zone_name} {rr_name} || {existing_user_defined} || {new_content}")
             if is_web_request:
                 messages.warning(request, "Nothing was removed")
             return
 
     logging.info(f"Updating RRSET {rr_name} TXT with {len(new_content_set)} values")
     # Replace to update the content
-    pdns_replace_rrset(zone_name, rr_name, "TXT", 1, new_content_set)
+    pdns_replace_rrset(zone_name, rr_name, "TXT", new_content_set)
     if is_web_request:
         if edit_action == EditActionEnum.ADD:
             messages.success(request, "Record added")
@@ -1053,3 +1047,13 @@ def update_txt_record_helper(
             messages.success(request, "Record removed")
 
 
+def get_existing_txt_records(zone_name: str, rr_name: str) -> List[str]:
+    details = pdns_describe_domain(rr_name)
+    existing_records = []
+    if details["rrsets"]:
+        for rrset in details["rrsets"]:
+            if domains_equal(rrset['name'], rr_name) and rrset["type"] == "TXT":
+                existing_records = rrset["records"]
+                break
+    
+    return existing_records

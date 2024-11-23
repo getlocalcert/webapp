@@ -119,3 +119,14 @@ def subdomain_name(value: str) -> str:
         if value.endswith(f".{suffix}"):
             return value.removesuffix(f".{suffix}")
     assert False  # pragma: no cover
+
+
+def domains_equal(a: str, b: str) -> bool:
+    if a.endswith('.'):
+        a = a[:-1]
+    if b.endswith('.'):
+        b = b[:-1]
+    return a == b
+
+
+

@@ -13,7 +13,6 @@ from .constants import (
     DEFAULT_SPF_POLICY,
 )
 from .models import Zone, ZoneApiKey
-from .pdns import pdns_replace_rrset
 from .utils import remove_trailing_dot
 
 
