@@ -12,25 +12,6 @@ services:
       - POSTGRES_PASSWORD
       - POSTGRES_USER
 
-  pdns:
-    build: pdns
-    restart: unless-stopped
-    ports:
-      - "53:53/udp"
-    environment:
-      - LOCALCERT_PDNS_DB_NAME
-      - LOCALCERT_PDNS_DEFAULT_SOA_CONTENT
-      - LOCALCERT_PDNS_HOST
-      - LOCALCERT_PDNS_WEBSERVER_ALLOW_FROM
-      - LOCALCERT_SHARED_PDNS_API_KEY
-      - POSTGRES_PASSWORD
-      - POSTGRES_USER
-    networks:
-      localcert-net:
-        ipv4_address: 10.33.44.2
-    depends_on:
-      - db
-
   web:
     build: localcert
     restart: unless-stopped
@@ -55,7 +36,6 @@ services:
         ipv4_address: 10.33.44.3
     depends_on:
       - db
-      - pdns
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.localcert-web.rule=(Host(`console.getlocalcert.net`)) || (Host(`api.getlocalcert.net`) && PathPrefix(`/api/`))"

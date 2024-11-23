@@ -30,7 +30,6 @@ from .models import (
     ZoneApiKey,
 )
 from .pdns import (
-    pdns_delete_rrset,
     pdns_describe_domain,
     pdns_replace_rrset,
 )
@@ -1014,12 +1013,7 @@ def update_txt_record_helper(
     is_web_request: str,
 ):
     new_content = f'"{rr_content}"'  # Normalize
-    existing_content = get_existing_txt_records(zone_name, rr_name)
-
-    # Pull out SPF record(s) so we don't change those
-    existing_spf_records = [_ for _ in existing_content if _ == DEFAULT_SPF_POLICY]
-    assert len(existing_spf_records) <= 1
-    existing_user_defined = [_ for _ in existing_content if _ != DEFAULT_SPF_POLICY]
+    existing_user_defined = get_existing_txt_records(zone_name, rr_name)
 
     if edit_action == EditActionEnum.ADD:
         if any([new_content == existing for existing in existing_user_defined]):
@@ -1049,17 +1043,9 @@ def update_txt_record_helper(
                 messages.warning(request, "Nothing was removed")
             return
 
-    # Always keep the SPF if it previously existed
-    new_content_set.extend(existing_spf_records)
-
-    if new_content_set:
-        logging.info(f"Updating RRSET {rr_name} TXT with {len(new_content_set)} values")
-        # Replace to update the content
-        pdns_replace_rrset(zone_name, rr_name, "TXT", 1, new_content_set)
-    else:
-        logging.info(f"Deleting RRSET {rr_name} TXT")
-        # Nothing remaining, delete the rr_set
-        pdns_delete_rrset(zone_name, rr_name, "TXT")
+    logging.info(f"Updating RRSET {rr_name} TXT with {len(new_content_set)} values")
+    # Replace to update the content
+    pdns_replace_rrset(zone_name, rr_name, "TXT", 1, new_content_set)
     if is_web_request:
         if edit_action == EditActionEnum.ADD:
             messages.success(request, "Record added")
@@ -1067,35 +1053,3 @@ def update_txt_record_helper(
             messages.success(request, "Record removed")
 
 
-def get_existing_txt_records(zone_name: str, rr_name: str) -> List[str]:
-    details = pdns_describe_domain(zone_name)
-    existing_records = []
-    existing_comments = []
-    if details["rrsets"]:
-        for rrset in details["rrsets"]:
-            if rrset["name"] == rr_name and rrset["type"] == "TXT":
-                existing_records = rrset["records"]
-                existing_comments = rrset["comments"]
-                break
-
-    # Check invariants
-    for record in existing_records:
-        assert all([comment["content"] for comment in existing_comments])
-        assert any(
-            [
-                comment["content"].startswith(f"{record['content']} : ")
-                for comment in existing_comments
-            ]
-        )
-    assert len(existing_comments) == len(existing_records)
-
-    # Each comment will contain "<content> : <index>" where <content> matches the TXT record
-    # content and <index> tracks the order these were added (oldest at index 0)
-    # Sort these so we can trim old content if needed
-    ordered_comments = sorted(
-        existing_comments, key=lambda x: int(x["content"].split(" : ")[1])
-    )
-    ordered_content = [
-        comment["content"].split(" : ")[0] for comment in ordered_comments
-    ]
-    return ordered_content
